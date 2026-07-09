@@ -60,5 +60,15 @@ internal data class TrackingEventParams(
     @SerialName("button_type")
     val buttonType: String? = null,
     @SerialName("app_switch_enabled")
-    val appSwitchEnabled: Boolean = false
+    val appSwitchEnabled: Boolean = false,
+    @SerialName("start_time")
+    val startTime: Long? = null,
+    @SerialName("end_time")
+    val endTime: Long? = null,
+    @SerialName("endpoint")
+    val endpoint: String? = null,
+    @SerialName("presentation_type")
+    val presentationType: String? = null,
+    @SerialName("flow")
+    val flow: String? = null
 )

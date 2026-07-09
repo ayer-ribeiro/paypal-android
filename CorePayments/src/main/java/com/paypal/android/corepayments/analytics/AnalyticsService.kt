@@ -40,12 +40,31 @@ class AnalyticsService internal constructor(
                 CoroutineScope(dispatcher)
             )
 
+    @Suppress("LongParameterList")
     fun sendAnalyticsEvent(
         name: String,
         orderId: String? = null,
         buttonType: String? = null,
-        appSwitchEnabled: Boolean = false
+        appSwitchEnabled: Boolean = false,
+        startTime: Long? = null,
+        endTime: Long? = null,
+        endpoint: String? = null,
+        presentationType: String? = null,
+        flow: String? = null
     ) {
+        // Log every event as it is dispatched, so events are visible even if the HTTP send fails.
+        val details = buildList {
+            orderId?.let { add("orderId=$it") }
+            buttonType?.let { add("buttonType=$it") }
+            add("appSwitchEnabled=$appSwitchEnabled")
+            startTime?.let { add("start_time=$it") }
+            endTime?.let { add("end_time=$it") }
+            endpoint?.let { add("endpoint=$it") }
+            presentationType?.let { add("presentation_type=$it") }
+            flow?.let { add("flow=$it") }
+        }.joinToString(", ")
+        Log.d(TAG, "Sending analytics event → $name { $details }")
+
         // TODO: send analytics event using WorkManager (supports coroutines) to avoid lint error
         // thrown because we don't use the Deferred result
         scope.launch {
@@ -58,18 +77,27 @@ class AnalyticsService internal constructor(
                     timestamp,
                     orderId = orderId,
                     buttonType = buttonType,
-                    appSwitchEnabled = appSwitchEnabled
+                    appSwitchEnabled = appSwitchEnabled,
+                    startTime = startTime,
+                    endTime = endTime,
+                    endpoint = endpoint,
+                    presentationType = presentationType,
+                    flow = flow
                 )
                 val response = trackingEventsAPI.sendEvent(analyticsEventData, deviceData)
-                response.error?.message?.let { errorMessage ->
-                    Log.d("[PayPal SDK]", "Failed to send analytics: $errorMessage")
+                val errorMessage = response.error?.message
+                if (errorMessage != null) {
+                    Log.d(TAG, "Failed to send analytics event '$name': $errorMessage")
+                } else {
+                    Log.d(TAG, "Analytics event sent ✓ $name (HTTP ${response.status})")
                 }
             } catch (e: PayPalSDKError) {
-                Log.d(
-                    "[PayPal SDK]",
-                    "Failed to send analytics due to missing clientId: ${e.message}"
-                )
+                Log.d(TAG, "Failed to send analytics event '$name' (missing clientId?): ${e.message}")
             }
         }
+    }
+
+    companion object {
+        private const val TAG = "[PayPal SDK] Analytics"
     }
 }
