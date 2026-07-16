@@ -7,5 +7,10 @@ internal data class AnalyticsEventData(
     val timestamp: Long,
     val orderId: String?,
     val buttonType: String? = null,
-    val appSwitchEnabled: Boolean
+    val appSwitchEnabled: Boolean,
+    val startTime: Long? = null,
+    val endTime: Long? = null,
+    val endpoint: String? = null,
+    val presentationType: String? = null,
+    val flow: String? = null
 )
