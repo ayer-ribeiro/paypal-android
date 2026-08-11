@@ -62,8 +62,23 @@ class PayPalClient internal constructor(
     // Shopper Session id (v3) — set by createPayPalSession(), awaited by start() / vault()
     @VisibleForTesting
     internal var shopperSessionDeferred: Deferred<CreateShopperSessionWithAppSwitchEligibilityResponse?>? = null
+    private val launchStateLock = Any()
+    private var launchAttempt: LaunchAttempt? = null
     private var returnToAppUrlConfig: ReturnToAppUrlConfig? = null
     private var sessionTokenType: TokenType? = null
+
+    private class LaunchAttempt(
+        val token: String,
+        val tokenType: TokenType,
+        val deferred: Deferred<CreateShopperSessionWithAppSwitchEligibilityResponse?>,
+        var retryable: Boolean = false,
+        var authState: String? = null,
+    )
+
+    private data class FinishContext(
+        val authState: String,
+        val attempt: LaunchAttempt?,
+    )
 
     constructor(
         context: Context,
@@ -123,12 +138,17 @@ class PayPalClient internal constructor(
         // Neither returnAppUrl nor fallbackSchemeUrl is usable — fail fast instead of starting a
         // shopper-session fetch; start()/vault() re-check this to report the error.
         if (!urlConfig.isValid()) {
-            shopperSessionDeferred = null
+            synchronized(launchStateLock) {
+                shopperSessionDeferred = null
+            }
             return
         }
 
-        shopperSessionDeferred = applicationScope.async {
+        val deferred = applicationScope.async {
             createShopperSessionWithAppSwitchEligibility("ppcp_android", tokenType, urlConfig, userIdentity, userAction)
+        }
+        synchronized(launchStateLock) {
+            shopperSessionDeferred = deferred
         }
     }
 
@@ -151,10 +171,6 @@ class PayPalClient internal constructor(
     ) {
         val startTime = System.currentTimeMillis()
         val urlConfig = returnToAppUrlConfig
-        val deferred = shopperSessionDeferred
-        if (deferred == null) {
-            initAnalyticsEventParams()
-        }
         analyticsEventParams = analyticsEventParams.copy(
             orderIdOrSetupTokenId = orderId,
             isVault = false,
@@ -163,43 +179,40 @@ class PayPalClient internal constructor(
             notifyCheckoutReturnToAppUrlConfigInvalid(orderId, callback, startTime)
             return
         }
-        if (deferred == null) {
+        val attempt = reserveLaunchAttempt(orderId, TokenType.ORDER_ID)
+        if (attempt == null) {
+            initAnalyticsEventParams()
+            analyticsEventParams = analyticsEventParams.copy(
+                orderIdOrSetupTokenId = orderId,
+                isVault = false,
+            )
             notifyCheckoutSessionNotStarted(callback, startTime)
             return
         }
         applicationScope.launch {
-            try {
-                val shopperSession = deferred.await()
-                shopperSessionDeferred = null
+            val result = try {
+                val shopperSession = attempt.deferred.await()
+                    ?: throw PayPalError.sessionCreationFailedError
                 analytics.notify(PayPalEvent.STARTED, params = analyticsEventParams)
-
-                if (shopperSession != null) {
-                    val result = launchCheckout(
-                        activity = activity,
-                        shopperSession = shopperSession,
-                        orderId = orderId,
-                        startTime = startTime,
-                    )
-                    withContext(Dispatchers.Main) {
-                        callback.onPayPalResult(result)
-                    }
-                } else {
-                    throw PayPalError.sessionCreationFailedError
-                }
+                launchCheckout(
+                    activity = activity,
+                    shopperSession = shopperSession,
+                    orderId = orderId,
+                    startTime = startTime,
+                ).also { handlePresentAuthChallengeResult(attempt, it) }
             } catch (e: Exception) {
                 analytics.notify(
                     event = PayPalEvent.FAILED,
                     params = analyticsEventParams,
                     errorDescription = e.message
                 )
-                shopperSessionDeferred = null
-                withContext(Dispatchers.Main) {
-                    callback.onPayPalResult(
-                        PayPalPresentAuthChallengeResult.Failure(
-                            e as? PayPalSDKError ?: PayPalError.unknownError
-                        )
-                    )
-                }
+                clearLaunchAttempt(attempt)
+                PayPalPresentAuthChallengeResult.Failure(
+                    e as? PayPalSDKError ?: PayPalError.unknownError
+                )
+            }
+            withContext(Dispatchers.Main) {
+                callback.onPayPalResult(result)
             }
         }
     }
@@ -223,10 +236,6 @@ class PayPalClient internal constructor(
     ) {
         val startTime = System.currentTimeMillis()
         val urlConfig = returnToAppUrlConfig
-        val deferred = shopperSessionDeferred
-        if (deferred == null) {
-            initAnalyticsEventParams()
-        }
         analyticsEventParams = analyticsEventParams.copy(
             orderIdOrSetupTokenId = setupTokenId,
             isVault = true,
@@ -235,43 +244,40 @@ class PayPalClient internal constructor(
             notifyVaultReturnToAppUrlConfigInvalid(setupTokenId, callback, startTime)
             return
         }
-        if (deferred == null) {
+        val attempt = reserveLaunchAttempt(setupTokenId, TokenType.VAULT_ID)
+        if (attempt == null) {
+            initAnalyticsEventParams()
+            analyticsEventParams = analyticsEventParams.copy(
+                orderIdOrSetupTokenId = setupTokenId,
+                isVault = true,
+            )
             notifyVaultSessionNotStarted(callback, startTime)
             return
         }
         applicationScope.launch {
-            try {
-                val shopperSession = deferred.await()
-                shopperSessionDeferred = null
+            val result = try {
+                val shopperSession = attempt.deferred.await()
+                    ?: throw PayPalError.sessionCreationFailedError
                 analytics.notify(PayPalEvent.STARTED, params = analyticsEventParams)
-
-                if (shopperSession != null) {
-                    val result = launchVault(
-                        activity = activity,
-                        shopperSession = shopperSession,
-                        setupTokenId = setupTokenId,
-                        startTime = startTime,
-                    )
-                    withContext(Dispatchers.Main) {
-                        callback.onPayPalResult(result)
-                    }
-                } else {
-                    throw PayPalError.sessionCreationFailedError
-                }
+                launchVault(
+                    activity = activity,
+                    shopperSession = shopperSession,
+                    setupTokenId = setupTokenId,
+                    startTime = startTime,
+                ).also { handlePresentAuthChallengeResult(attempt, it) }
             } catch (e: Exception) {
                 analytics.notify(
                     event = PayPalEvent.FAILED,
                     params = analyticsEventParams,
                     errorDescription = e.message
                 )
-                shopperSessionDeferred = null
-                withContext(Dispatchers.Main) {
-                    callback.onPayPalResult(
-                        PayPalPresentAuthChallengeResult.Failure(
-                            e as? PayPalSDKError ?: PayPalError.unknownError
-                        )
-                    )
-                }
+                clearLaunchAttempt(attempt)
+                PayPalPresentAuthChallengeResult.Failure(
+                    e as? PayPalSDKError ?: PayPalError.unknownError
+                )
+            }
+            withContext(Dispatchers.Main) {
+                callback.onPayPalResult(result)
             }
         }
     }
@@ -285,13 +291,16 @@ class PayPalClient internal constructor(
      * back into the foreground after an auth challenge.
      */
     fun finishStart(intent: Intent): PayPalFinishStartResult? =
-        sessionStore.authState?.let { authState ->
+        synchronized(launchStateLock) {
+            val authState = sessionStore.authState ?: return@synchronized null
+            val context = FinishContext(
+                authState = authState,
+                attempt = getMatchingLaunchAttempt(TokenType.ORDER_ID, authState),
+            )
             analytics.notify(PayPalEvent.HANDLE_RETURN_STARTED, params = analyticsEventParams)
             val result = payPalLauncher.completeCheckoutAuthRequest(intent, authState)
             logCheckoutResult(result)
-            if (result != PayPalFinishStartResult.NoResult) {
-                sessionStore.clear()
-            }
+            handleFinishResult(context, result == PayPalFinishStartResult.NoResult)
             result
         }
 
@@ -304,13 +313,16 @@ class PayPalClient internal constructor(
      * back into the foreground after an auth challenge.
      */
     fun finishVault(intent: Intent): PayPalFinishVaultResult? =
-        sessionStore.authState?.let { authState ->
+        synchronized(launchStateLock) {
+            val authState = sessionStore.authState ?: return@synchronized null
+            val context = FinishContext(
+                authState = authState,
+                attempt = getMatchingLaunchAttempt(TokenType.VAULT_ID, authState),
+            )
             analytics.notify(PayPalEvent.HANDLE_RETURN_STARTED, params = analyticsEventParams)
             val result = payPalLauncher.completeVaultAuthRequest(intent, authState)
             logVaultResult(result)
-            if (result != PayPalFinishVaultResult.NoResult) {
-                sessionStore.clear()
-            }
+            handleFinishResult(context, result == PayPalFinishVaultResult.NoResult)
             result
         }
 
@@ -469,6 +481,89 @@ class PayPalClient internal constructor(
     // endregion
 
     // region Private Helpers
+    private fun reserveLaunchAttempt(token: String, tokenType: TokenType): LaunchAttempt? =
+        synchronized(launchStateLock) {
+            val deferred = shopperSessionDeferred ?: return@synchronized null
+            val currentAttempt = launchAttempt
+            when {
+                currentAttempt == null || currentAttempt.deferred !== deferred -> {
+                    sessionStore.clear()
+                    LaunchAttempt(token, tokenType, deferred).also { launchAttempt = it }
+                }
+
+                currentAttempt.retryable &&
+                    currentAttempt.token == token &&
+                    currentAttempt.tokenType == tokenType -> {
+                    if (sessionStore.authState == currentAttempt.authState) {
+                        sessionStore.clear()
+                    }
+                    currentAttempt.retryable = false
+                    currentAttempt.authState = null
+                    currentAttempt
+                }
+
+                else -> null
+            }
+        }
+
+    private fun handlePresentAuthChallengeResult(
+        attempt: LaunchAttempt,
+        result: PayPalPresentAuthChallengeResult,
+    ) {
+        when (result) {
+            is PayPalPresentAuthChallengeResult.Success -> synchronized(launchStateLock) {
+                if (launchAttempt === attempt) {
+                    attempt.authState = result.authState
+                    sessionStore.authState = result.authState
+                }
+            }
+
+            is PayPalPresentAuthChallengeResult.Failure -> clearLaunchAttempt(attempt)
+        }
+    }
+
+    private fun clearLaunchAttempt(attempt: LaunchAttempt) {
+        synchronized(launchStateLock) {
+            val isCurrentAttempt = launchAttempt === attempt
+            if (isCurrentAttempt) {
+                launchAttempt = null
+            }
+            if (shopperSessionDeferred === attempt.deferred) {
+                shopperSessionDeferred = null
+            }
+            if (isCurrentAttempt && sessionStore.authState == attempt.authState) {
+                sessionStore.clear()
+            }
+        }
+    }
+
+    private fun getMatchingLaunchAttempt(tokenType: TokenType, authState: String): LaunchAttempt? =
+        launchAttempt?.takeIf {
+            it.tokenType == tokenType && it.authState == authState
+        }
+
+    private fun handleFinishResult(context: FinishContext, isNoResult: Boolean) {
+        synchronized(launchStateLock) {
+            if (sessionStore.authState != context.authState) {
+                return@synchronized
+            }
+            if (isNoResult) {
+                context.attempt?.takeIf { launchAttempt === it }?.retryable = true
+                return@synchronized
+            }
+
+            sessionStore.clear()
+            context.attempt?.let { attempt ->
+                if (launchAttempt === attempt) {
+                    launchAttempt = null
+                }
+                if (shopperSessionDeferred === attempt.deferred) {
+                    shopperSessionDeferred = null
+                }
+            }
+        }
+    }
+
     private fun initAnalyticsEventParams() {
         analyticsEventParams = AnalyticsEventParams(
             merchantId = coreConfig.merchantId,
@@ -702,7 +797,6 @@ class PayPalClient internal constructor(
                     PayPalEvent.AUTH_CHALLENGE_PRESENTATION_SUCCEEDED
                 }
                 analytics.notify(event, params = analyticsEventParams)
-                sessionStore.authState = result.authState
                 logUserPerceivedLatency(flowType, result, startTime, endTime)
             }
             is PayPalPresentAuthChallengeResult.Failure -> {
