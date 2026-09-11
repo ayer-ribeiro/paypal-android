@@ -1,6 +1,5 @@
 package com.paypal.android.ui.paypalvault
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
@@ -11,11 +10,13 @@ import com.paypal.android.api.services.SDKSampleServerAPI
 import com.paypal.android.corepayments.CoreConfig
 import com.paypal.android.corepayments.model.TokenType
 import com.paypal.android.customenvironment.CustomEnvironmentRepository
+import com.paypal.android.paypalpayments.PayPalAuthChallenge
 import com.paypal.android.paypalpayments.PayPalPresentAuthChallengeResult
 import com.paypal.android.paypalpayments.PayPalUserAction
 import com.paypal.android.paypalpayments.PayPalUserIdentity
 import com.paypal.android.paypalpayments.PayPalClient
 import com.paypal.android.paypalpayments.PayPalFinishVaultResult
+import com.paypal.android.paypalpayments.PayPalLaunchResult
 import com.paypal.android.uishared.state.ActionState
 import com.paypal.android.usecase.CreatePayPalPaymentTokenUseCase
 import com.paypal.android.usecase.CreatePayPalSetupTokenUseCase
@@ -95,7 +96,7 @@ class PayPalVaultViewModel @Inject constructor(
     private val createdSetupToken: PayPalSetupToken?
         get() = (createSetupTokenState as? ActionState.Success)?.value
 
-    fun vaultSetupToken(activity: Activity) {
+    fun vaultSetupToken(launchPayPal: (PayPalAuthChallenge) -> Unit) {
         val setupTokenId = createdSetupToken?.id
 
         if (setupTokenId == null) {
@@ -103,11 +104,10 @@ class PayPalVaultViewModel @Inject constructor(
         } else {
             vaultPayPalState = ActionState.Loading
 
-            paypalClient.vault(activity, setupTokenId) { result ->
+            paypalClient.vault(setupTokenId) { result ->
                 when (result) {
-                    is PayPalPresentAuthChallengeResult.Success -> {
-                        // do nothing; wait for web vault approval to return to the app
-                    }
+                    is PayPalPresentAuthChallengeResult.Success ->
+                        launchPayPal(result.authChallenge)
 
                     is PayPalPresentAuthChallengeResult.Failure ->
                         vaultPayPalState = ActionState.Failure(result.error)
@@ -132,16 +132,24 @@ class PayPalVaultViewModel @Inject constructor(
 
     fun completeAuthChallenge(intent: Intent) {
         paypalClient.finishVault(intent)?.let { result ->
-            vaultPayPalState = when (result) {
-                is PayPalFinishVaultResult.Success -> ActionState.Success(result)
-                is PayPalFinishVaultResult.Failure -> ActionState.Failure(result.error)
-                PayPalFinishVaultResult.Canceled ->
-                    ActionState.Failure(Exception("USER CANCELED"))
+            handleFinishResult(result)
+        }
+    }
 
-                PayPalFinishVaultResult.NoResult -> {
-                    // no result; re-enable PayPal button so user can retry
-                    ActionState.Idle
-                }
+    fun completeAuthChallenge(result: PayPalLaunchResult) {
+        paypalClient.finishVault(result)?.let(::handleFinishResult)
+    }
+
+    private fun handleFinishResult(result: PayPalFinishVaultResult) {
+        vaultPayPalState = when (result) {
+            is PayPalFinishVaultResult.Success -> ActionState.Success(result)
+            is PayPalFinishVaultResult.Failure -> ActionState.Failure(result.error)
+            PayPalFinishVaultResult.Canceled ->
+                ActionState.Failure(Exception("USER CANCELED"))
+
+            PayPalFinishVaultResult.NoResult -> {
+                // no result; re-enable PayPal button so user can retry
+                ActionState.Idle
             }
         }
     }

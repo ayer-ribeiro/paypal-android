@@ -1,5 +1,6 @@
 package com.paypal.android.ui.paypal
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +22,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.paypal.android.R
+import com.paypal.android.paypalpayments.LaunchPayPal
 import com.paypal.android.uishared.components.ActionButtonColumn
 import com.paypal.android.uishared.components.AmountForm
 import com.paypal.android.uishared.components.CreateOrderForm
@@ -40,6 +42,9 @@ import com.paypal.android.utils.getActivityOrNull
 fun PayPalCheckoutView(
     viewModel: PayPalCheckoutViewModel = hiltViewModel()
 ) {
+    val payPalLauncher = rememberLauncherForActivityResult(LaunchPayPal()) { result ->
+        viewModel.completeAuthChallenge(result)
+    }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     LaunchedEffect(scrollState.maxValue) {
@@ -69,7 +74,12 @@ fun PayPalCheckoutView(
     ) {
         Step1_CreateOrder(uiState, viewModel)
         if (uiState.isCreateOrderSuccessful) {
-            Step2_StartPayPalCheckout(uiState, viewModel)
+            Step2_StartPayPalCheckout(
+                uiState = uiState,
+                onStartCheckout = {
+                    viewModel.startCheckout { challenge -> payPalLauncher.launch(challenge) }
+                },
+            )
         }
         if (uiState.isPayPalCheckoutSuccessful) {
             Step3_CompleteOrder(uiState, viewModel)
@@ -134,8 +144,10 @@ private fun Step1_CreateOrder(uiState: PayPalUiState, viewModel: PayPalCheckoutV
 }
 
 @Composable
-private fun Step2_StartPayPalCheckout(uiState: PayPalUiState, viewModel: PayPalCheckoutViewModel) {
-    val context = LocalContext.current
+private fun Step2_StartPayPalCheckout(
+    uiState: PayPalUiState,
+    onStartCheckout: () -> Unit,
+) {
     Column(
         verticalArrangement = UIConstants.spacingMedium,
     ) {
@@ -144,7 +156,7 @@ private fun Step2_StartPayPalCheckout(uiState: PayPalUiState, viewModel: PayPalC
             defaultTitle = "START CHECKOUT",
             successTitle = "CHECKOUT COMPLETE",
             state = uiState.payPalCheckoutState,
-            onClick = { context.getActivityOrNull()?.let { viewModel.startCheckout(it) } },
+            onClick = onStartCheckout,
             modifier = Modifier.fillMaxWidth()
         ) { state ->
             when (state) {

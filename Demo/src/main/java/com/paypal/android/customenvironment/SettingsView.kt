@@ -33,35 +33,16 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.paypal.android.DemoActivityType
 
 private val successGreen = Color(color = 0xff007f5f)
 
-private data class ActivityTypeSettings(
-    val type: DemoActivityType,
-    val onSwitch: () -> Unit,
-)
-
-private data class SettingsContentState(
-    val uiState: SettingsUiState,
-    val activityTypeSettings: ActivityTypeSettings,
-)
-
 @Composable
 fun SettingsView(
-    activityType: DemoActivityType,
-    onSwitchActivityType: () -> Unit,
-    viewModel: SettingsViewModel = hiltViewModel(),
+    viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     SettingsContent(
-        contentState = SettingsContentState(
-            uiState = uiState,
-            activityTypeSettings = ActivityTypeSettings(
-                type = activityType,
-                onSwitch = onSwitchActivityType,
-            ),
-        ),
+        uiState = uiState,
         onEnvironmentChange = viewModel::updateSelectedEnvironment,
         onCustomSdkRestUrlChange = viewModel::updateCustomSdkRestUrl,
         onCustomSdkGraphQLUrlChange = viewModel::updateCustomSdkGraphQLUrl,
@@ -69,13 +50,13 @@ fun SettingsView(
         onCustomMerchantBaseUrlChange = viewModel::updateCustomMerchantBaseUrl,
         onCustomMerchantIdChange = viewModel::updateCustomMerchantId,
         onSaveClick = viewModel::saveConfig,
-        onClearClick = viewModel::clearConfig,
+        onClearClick = viewModel::clearConfig
     )
 }
 
 @Composable
 private fun SettingsContent(
-    contentState: SettingsContentState,
+    uiState: SettingsUiState,
     onEnvironmentChange: (SelectedEnvironment) -> Unit,
     onCustomSdkRestUrlChange: (String) -> Unit,
     onCustomSdkGraphQLUrlChange: (String) -> Unit,
@@ -83,9 +64,8 @@ private fun SettingsContent(
     onCustomMerchantBaseUrlChange: (String) -> Unit,
     onCustomMerchantIdChange: (String) -> Unit,
     onSaveClick: () -> Unit,
-    onClearClick: () -> Unit,
+    onClearClick: () -> Unit
 ) {
-    val uiState = contentState.uiState
     val scrollState = rememberScrollState()
     Column(
         modifier = Modifier
@@ -94,11 +74,6 @@ private fun SettingsContent(
             .padding(horizontal = 16.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ActivityTypeSection(
-            activityType = contentState.activityTypeSettings.type,
-            onSwitchActivityType = contentState.activityTypeSettings.onSwitch,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
         SettingsHeader()
         EnvironmentSelector(selected = uiState.settings.selectedEnvironment, onSelect = onEnvironmentChange)
         if (uiState.settings.selectedEnvironment == SelectedEnvironment.CUSTOM) {
@@ -124,28 +99,6 @@ private fun SettingsContent(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-    }
-}
-
-@Composable
-private fun ActivityTypeSection(
-    activityType: DemoActivityType,
-    onSwitchActivityType: () -> Unit,
-) {
-    Text(
-        text = "Activity Type",
-        style = MaterialTheme.typography.titleLarge,
-    )
-    Text(
-        text = activityType.description,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    OutlinedButton(
-        onClick = onSwitchActivityType,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(activityType.switchActionLabel)
     }
 }
 
@@ -197,7 +150,7 @@ private fun CustomEnvironmentFields(
 @Composable
 private fun SettingsHeader() {
     Text(
-        text = "Environment Settings",
+        text = "Custom Environment",
         style = MaterialTheme.typography.titleLarge
     )
     Text(
@@ -297,24 +250,18 @@ private fun SettingsViewPreview() {
     MaterialTheme {
         Surface {
             SettingsContent(
-                contentState = SettingsContentState(
-                    uiState = SettingsUiState(
-                        settings = DemoEnvironmentSettings(
-                            selectedEnvironment = SelectedEnvironment.CUSTOM,
-                            customSdkRestUrl = "not-a-valid-url",
-                            customSdkGraphQLUrl = "",
-                            customClientId = "client-id-entered-at-runtime",
-                            customMerchantBaseUrl = "bad merchant url",
-                            customMerchantId = "merchant-id-entered-at-runtime",
-                        ),
-                        restUrlError = "URL must start with https://",
-                        graphQLUrlError = "URL is required",
-                        merchantBaseUrlError = "URL must not contain spaces"
+                uiState = SettingsUiState(
+                    settings = DemoEnvironmentSettings(
+                        selectedEnvironment = SelectedEnvironment.CUSTOM,
+                        customSdkRestUrl = "not-a-valid-url",
+                        customSdkGraphQLUrl = "",
+                        customClientId = "client-id-entered-at-runtime",
+                        customMerchantBaseUrl = "bad merchant url",
+                        customMerchantId = "merchant-id-entered-at-runtime",
                     ),
-                    activityTypeSettings = ActivityTypeSettings(
-                        type = DemoActivityType.COMPONENT_ACTIVITY,
-                        onSwitch = {},
-                    ),
+                    restUrlError = "URL must start with https://",
+                    graphQLUrlError = "URL is required",
+                    merchantBaseUrlError = "URL must not contain spaces"
                 ),
                 onEnvironmentChange = {},
                 onCustomSdkRestUrlChange = {},
@@ -323,7 +270,7 @@ private fun SettingsViewPreview() {
                 onCustomMerchantBaseUrlChange = {},
                 onCustomMerchantIdChange = {},
                 onSaveClick = {},
-                onClearClick = {},
+                onClearClick = {}
             )
         }
     }

@@ -22,7 +22,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.paypal.android.BuildConfig
-import com.paypal.android.DemoActivityType
 import com.paypal.android.customenvironment.SettingsView
 import com.paypal.android.models.TestCard
 import com.paypal.android.ui.approveorder.ApproveOrderView
@@ -48,10 +47,7 @@ import com.paypal.android.utils.UIConstants
 @ExperimentalMaterial3Api
 @ExperimentalFoundationApi
 @Composable
-fun DemoApp(
-    activityType: DemoActivityType,
-    onSwitchActivityType: () -> Unit,
-) {
+fun DemoApp() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     var shouldDisplayBackButton by remember { mutableStateOf(false) }
@@ -139,10 +135,7 @@ fun DemoApp(
                 }
                 if (BuildConfig.DEBUG) {
                     composable(DemoAppDestinations.SETTINGS) {
-                        SettingsView(
-                            activityType = activityType,
-                            onSwitchActivityType = onSwitchActivityType,
-                        )
+                        SettingsView()
                     }
                 }
             }

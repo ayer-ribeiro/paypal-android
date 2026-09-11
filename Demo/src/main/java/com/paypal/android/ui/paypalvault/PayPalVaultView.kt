@@ -1,5 +1,6 @@
 package com.paypal.android.ui.paypalvault
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.paypal.android.R
+import com.paypal.android.paypalpayments.LaunchPayPal
 import com.paypal.android.paypalpayments.PayPalFinishVaultResult
 import com.paypal.android.uishared.components.ActionButtonColumn
 import com.paypal.android.uishared.components.EnumOptionList
@@ -35,6 +37,9 @@ import com.paypal.android.utils.getActivityOrNull
 
 @Composable
 fun PayPalVaultView(viewModel: PayPalVaultViewModel = hiltViewModel()) {
+    val payPalLauncher = rememberLauncherForActivityResult(LaunchPayPal()) { result ->
+        viewModel.completeAuthChallenge(result)
+    }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     val scrollState = rememberScrollState()
@@ -65,7 +70,12 @@ fun PayPalVaultView(viewModel: PayPalVaultViewModel = hiltViewModel()) {
     ) {
         Step1_CreateSetupToken(uiState, viewModel)
         if (uiState.isCreateSetupTokenSuccessful) {
-            Step2_VaultPayPal(uiState, viewModel)
+            Step2_VaultPayPal(
+                uiState = uiState,
+                onVaultPayPal = {
+                    viewModel.vaultSetupToken { challenge -> payPalLauncher.launch(challenge) }
+                },
+            )
         }
         if (uiState.isVaultPayPalSuccessful) {
             Step3_CreatePaymentToken(uiState, viewModel)
@@ -112,9 +122,8 @@ private fun Step1_CreateSetupToken(
 @Composable
 private fun Step2_VaultPayPal(
     uiState: PayPalVaultUiState,
-    viewModel: PayPalVaultViewModel
+    onVaultPayPal: () -> Unit,
 ) {
-    val context = LocalContext.current
     Column(
         verticalArrangement = UIConstants.spacingMedium,
     ) {
@@ -123,11 +132,7 @@ private fun Step2_VaultPayPal(
             defaultTitle = "VAULT PAYPAL",
             successTitle = "PAYPAL VAULTED",
             state = uiState.vaultPayPalState,
-            onClick = {
-                context.getActivityOrNull()?.let { activity ->
-                    viewModel.vaultSetupToken(activity)
-                }
-            }
+            onClick = onVaultPayPal,
         ) { state ->
             when (state) {
                 is CompletedActionState.Failure -> ErrorView(error = state.value)

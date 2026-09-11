@@ -14,16 +14,9 @@ fun OnNewIntentEffect(callback: (newIntent: Intent) -> Unit) {
         val listener = Consumer<Intent> { newIntent ->
             callback(newIntent)
         }
-        val activity = context.getActivityOrNull()
-        when (activity) {
-            is androidx.activity.ComponentActivity -> activity.addOnNewIntentListener(listener)
-            is NewIntentListenerHost -> activity.addOnNewIntentListener(listener)
-        }
+        context.getActivityOrNull()?.addOnNewIntentListener(listener)
         onDispose {
-            when (activity) {
-                is androidx.activity.ComponentActivity -> activity.removeOnNewIntentListener(listener)
-                is NewIntentListenerHost -> activity.removeOnNewIntentListener(listener)
-            }
+            context.getActivityOrNull()?.removeOnNewIntentListener(listener)
         }
     }
 }

@@ -3,9 +3,7 @@ package com.paypal.android.corepayments
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.RestrictTo
-import androidx.browser.auth.AuthTabIntent
 import androidx.core.net.toUri
-import com.paypal.android.corepayments.browserswitch.AuthTabClient
 import com.paypal.android.corepayments.browserswitch.BrowserSwitchOptions
 import com.paypal.android.corepayments.browserswitch.BrowserSwitchPendingState
 
@@ -19,9 +17,6 @@ sealed class CaptureDeepLinkResult {
 
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     data class Failure(val reason: PayPalSDKError) : CaptureDeepLinkResult()
-
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    data class Canceled(val originalOptions: BrowserSwitchOptions) : CaptureDeepLinkResult()
 
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     data class Ignore(val debugMessage: String) : CaptureDeepLinkResult()
@@ -49,33 +44,7 @@ fun captureDeepLink(
         return CaptureDeepLinkResult.Ignore("Request code does not match.")
     }
 
-    if (intent.hasExtra(AuthTabClient.EXTRA_AUTH_TAB_RESULT_CODE)) {
-        return captureAuthTabResult(intent, options)
-    }
-
     return captureDeepLinkUri(intent, options)
-}
-
-private fun captureAuthTabResult(
-    intent: Intent,
-    options: BrowserSwitchOptions
-): CaptureDeepLinkResult {
-    val resultCode = intent.getIntExtra(
-        AuthTabClient.EXTRA_AUTH_TAB_RESULT_CODE,
-        AuthTabIntent.RESULT_UNKNOWN_CODE
-    )
-
-    return when (resultCode) {
-        AuthTabIntent.RESULT_CANCELED -> CaptureDeepLinkResult.Canceled(options)
-        AuthTabIntent.RESULT_OK -> captureDeepLinkUri(intent, options)
-        else -> {
-            val reason = PayPalSDKError(
-                code = 0,
-                errorDescription = "Auth Tab failed with result code $resultCode."
-            )
-            CaptureDeepLinkResult.Failure(reason)
-        }
-    }
 }
 
 private fun captureDeepLinkUri(

@@ -1,28 +1,20 @@
 package com.paypal.android.paypalpayments
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.paypal.android.corepayments.BrowserSwitchRequestCodes
 import com.paypal.android.corepayments.CaptureDeepLinkResult
 import com.paypal.android.corepayments.DeepLink
 import com.paypal.android.corepayments.ReturnToAppStrategy
-import com.paypal.android.corepayments.browserswitch.BrowserSwitchClient
 import com.paypal.android.corepayments.browserswitch.BrowserSwitchLaunchMode
 import com.paypal.android.corepayments.browserswitch.BrowserSwitchOptions
 import com.paypal.android.corepayments.browserswitch.BrowserSwitchPendingState
-import com.paypal.android.corepayments.browserswitch.BrowserSwitchStartResult
 import com.paypal.android.corepayments.captureDeepLink
 import com.paypal.android.corepayments.model.TokenType
 import com.paypal.android.paypalpayments.errors.PayPalError
 import org.json.JSONObject
 
-// TODO: consider renaming PayPalLauncher to PayPalAuthChallengeLauncher
-internal class PayPalLauncher(
-    private val browserSwitchClient: BrowserSwitchClient
-) {
-
-    constructor(context: Context) : this(BrowserSwitchClient(context))
+internal class PayPalAuthChallengeHandler {
 
     companion object {
         private const val METADATA_KEY_ORDER_ID = "order_id"
@@ -31,8 +23,7 @@ internal class PayPalLauncher(
         private const val URL_PARAM_APPROVAL_SESSION_ID = "approval_session_id"
     }
 
-    fun launchWithUrl(
-        context: Context,
+    fun createAuthChallenge(
         uri: Uri,
         token: String,
         tokenType: TokenType,
@@ -48,7 +39,9 @@ internal class PayPalLauncher(
             metadata = metadata,
             launchMode = launchMode,
         )
-        return launchBrowserSwitch(context, options)
+        val authState = BrowserSwitchPendingState(options).toBase64EncodedJSON()
+        val authChallenge = PayPalAuthChallenge(options)
+        return PayPalPresentAuthChallengeResult.Success(authChallenge, authState)
     }
 
     private fun getRequestCode(tokenType: TokenType): Int {
@@ -70,22 +63,6 @@ internal class PayPalLauncher(
         }
     }
 
-    private fun launchBrowserSwitch(
-        context: Context,
-        options: BrowserSwitchOptions
-    ): PayPalPresentAuthChallengeResult =
-        when (val startResult = browserSwitchClient.start(context, options)) {
-            is BrowserSwitchStartResult.Success -> {
-                val pendingState = BrowserSwitchPendingState(options)
-                PayPalPresentAuthChallengeResult.Success(pendingState.toBase64EncodedJSON())
-            }
-
-            is BrowserSwitchStartResult.Failure -> {
-                val error = PayPalError.browserSwitchError(startResult.error)
-                PayPalPresentAuthChallengeResult.Failure(error)
-            }
-        }
-
     fun completeCheckoutAuthRequest(
         intent: Intent,
         authState: String
@@ -96,12 +73,27 @@ internal class PayPalLauncher(
             is CaptureDeepLinkResult.Failure ->
                 PayPalFinishStartResult.Failure(result.reason, orderId = null)
 
-            is CaptureDeepLinkResult.Canceled -> PayPalFinishStartResult.Canceled(
-                result.originalOptions.metadata?.optString(METADATA_KEY_ORDER_ID)
-            )
-
             is CaptureDeepLinkResult.Ignore -> PayPalFinishStartResult.NoResult
         }
+    }
+
+    fun completeCheckoutAuthRequest(
+        result: PayPalLaunchResult,
+        authState: String,
+    ): PayPalFinishStartResult = when (result) {
+        is PayPalLaunchResult.Success -> completeCheckoutAuthRequest(
+            Intent(Intent.ACTION_VIEW, result.resultUri),
+            authState,
+        )
+
+        PayPalLaunchResult.Canceled -> PayPalFinishStartResult.Canceled(
+            getOriginalOptions(authState)?.metadata?.optString(METADATA_KEY_ORDER_ID)
+        )
+
+        is PayPalLaunchResult.Failure -> PayPalFinishStartResult.Failure(
+            result.error,
+            getOriginalOptions(authState)?.metadata?.optString(METADATA_KEY_ORDER_ID),
+        )
     }
 
     fun completeVaultAuthRequest(
@@ -114,11 +106,25 @@ internal class PayPalLauncher(
             is CaptureDeepLinkResult.Failure ->
                 PayPalFinishVaultResult.Failure(result.reason)
 
-            is CaptureDeepLinkResult.Canceled -> PayPalFinishVaultResult.Canceled
-
             is CaptureDeepLinkResult.Ignore -> PayPalFinishVaultResult.NoResult
         }
     }
+
+    fun completeVaultAuthRequest(
+        result: PayPalLaunchResult,
+        authState: String,
+    ): PayPalFinishVaultResult = when (result) {
+        is PayPalLaunchResult.Success -> completeVaultAuthRequest(
+            Intent(Intent.ACTION_VIEW, result.resultUri),
+            authState,
+        )
+
+        PayPalLaunchResult.Canceled -> PayPalFinishVaultResult.Canceled
+        is PayPalLaunchResult.Failure -> PayPalFinishVaultResult.Failure(result.error)
+    }
+
+    private fun getOriginalOptions(authState: String): BrowserSwitchOptions? =
+        BrowserSwitchPendingState.fromBase64(authState)?.originalOptions
 
     private fun parseWebCheckoutSuccessResult(
         deepLink: DeepLink

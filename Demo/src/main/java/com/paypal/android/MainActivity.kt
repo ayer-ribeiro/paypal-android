@@ -17,16 +17,8 @@ class MainActivity : ComponentActivity() {
     @ExperimentalFoundationApi
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (redirectCheckoutReturnIfNeeded(DemoActivityType.COMPONENT_ACTIVITY)) {
-            return
-        }
         setContent {
-            DemoApp(
-                activityType = DemoActivityType.COMPONENT_ACTIVITY,
-                onSwitchActivityType = {
-                    switchDemoActivityType(DemoActivityType.COMPONENT_ACTIVITY)
-                }
-            )
+            DemoApp()
         }
     }
 }

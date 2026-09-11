@@ -1,6 +1,5 @@
 package com.paypal.android.ui.paypal
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.util.Log
@@ -18,11 +17,13 @@ import com.paypal.android.customenvironment.CustomEnvironmentRepository
 import com.paypal.android.fraudprotection.PayPalDataCollector
 import com.paypal.android.fraudprotection.PayPalDataCollectorRequest
 import com.paypal.android.models.OrderRequest
+import com.paypal.android.paypalpayments.PayPalAuthChallenge
 import com.paypal.android.paypalpayments.PayPalPresentAuthChallengeResult
 import com.paypal.android.paypalpayments.PayPalUserAction
 import com.paypal.android.paypalpayments.PayPalUserIdentity
 import com.paypal.android.paypalpayments.PayPalClient
 import com.paypal.android.paypalpayments.PayPalFinishStartResult
+import com.paypal.android.paypalpayments.PayPalLaunchResult
 import com.paypal.android.paypalpayments.PayPalCheckoutFundingSource
 import com.paypal.android.uishared.enums.StoreInVaultOption
 import com.paypal.android.uishared.state.ActionState
@@ -156,23 +157,25 @@ class PayPalCheckoutViewModel @Inject constructor(
         PayPalUserAction.SETUP_NOW -> UserActionSelected.SETUP_NOW
     }
 
-    fun startCheckout(activity: Activity) {
+    fun startCheckout(launchPayPal: (PayPalAuthChallenge) -> Unit) {
         val orderId = createdOrder?.id
         if (orderId == null) {
             payPalCheckoutState = ActionState.Failure(Exception("Create an order to continue."))
         } else {
-            startCheckoutWithOrderId(activity, orderId)
+            startCheckoutWithOrderId(orderId, launchPayPal)
         }
     }
 
-    private fun startCheckoutWithOrderId(activity: Activity, orderId: String) {
+    private fun startCheckoutWithOrderId(
+        orderId: String,
+        launchPayPal: (PayPalAuthChallenge) -> Unit,
+    ) {
         payPalCheckoutState = ActionState.Loading
 
-        paypalClient.start(activity, orderId) { startResult ->
+        paypalClient.start(orderId) { startResult ->
             when (startResult) {
-                is PayPalPresentAuthChallengeResult.Success -> {
-                    // do nothing; wait for web checkout to return to the app
-                }
+                is PayPalPresentAuthChallengeResult.Success ->
+                    launchPayPal(startResult.authChallenge)
 
                 is PayPalPresentAuthChallengeResult.Failure ->
                     payPalCheckoutState = ActionState.Failure(startResult.error)
@@ -198,25 +201,34 @@ class PayPalCheckoutViewModel @Inject constructor(
 
     fun completeAuthChallenge(intent: Intent) =
         paypalClient.finishStart(intent)?.let { payPalAuthResult ->
-            when (payPalAuthResult) {
-                is PayPalFinishStartResult.Success -> {
-                    payPalCheckoutState = ActionState.Success(payPalAuthResult)
-                }
+            handleFinishResult(payPalAuthResult)
+        }
 
-                is PayPalFinishStartResult.Canceled -> {
-                    val error = Exception("USER CANCELED")
-                    payPalCheckoutState = ActionState.Failure(error)
-                }
+    fun completeAuthChallenge(result: PayPalLaunchResult) =
+        paypalClient.finishStart(result)?.let { payPalAuthResult ->
+            handleFinishResult(payPalAuthResult)
+        }
 
-                is PayPalFinishStartResult.Failure -> {
-                    Log.i(TAG, "Checkout Error: ${payPalAuthResult.error.errorDescription}")
-                    payPalCheckoutState = ActionState.Failure(payPalAuthResult.error)
-                }
+    private fun handleFinishResult(payPalAuthResult: PayPalFinishStartResult) {
+        when (payPalAuthResult) {
+            is PayPalFinishStartResult.Success -> {
+                payPalCheckoutState = ActionState.Success(payPalAuthResult)
+            }
 
-                PayPalFinishStartResult.NoResult -> {
-                    // no result; re-enable PayPal button so user can retry
-                    payPalCheckoutState = ActionState.Idle
-                }
+            is PayPalFinishStartResult.Canceled -> {
+                val error = Exception("USER CANCELED")
+                payPalCheckoutState = ActionState.Failure(error)
+            }
+
+            is PayPalFinishStartResult.Failure -> {
+                Log.i(TAG, "Checkout Error: ${payPalAuthResult.error.errorDescription}")
+                payPalCheckoutState = ActionState.Failure(payPalAuthResult.error)
+            }
+
+            PayPalFinishStartResult.NoResult -> {
+                // no result; re-enable PayPal button so user can retry
+                payPalCheckoutState = ActionState.Idle
             }
         }
+    }
 }
