@@ -1,16 +1,16 @@
-This guide shows you how to accept a **PayPal payment** in your Android app with PayPal Mobile SDK V3.0.0 — One-Time Checkout, Vault (with or without a purchase), and Pay Later / PayPal Credit. The **PayPal button** is the highlighted way to start checkout: when the buyer taps it, checkout happens in the PayPal app if they are eligible and have it installed — approving with biometrics or a passkey — then returns to your app through your Android App Link. If the PayPal app is not installed or the buyer is not eligible, checkout continues in an in-app browser automatically. A `ComponentActivity` host uses an Auth Tab; a plain `android.app.Activity` host uses a Chrome Custom Tab.
+This guide shows you how to accept a **PayPal payment** in your Android app with PayPal Mobile SDK V3.0.0 — One-Time Checkout, Vault (with or without a purchase), and Pay Later / PayPal Credit. The **PayPal button** is the highlighted way to start checkout: when the buyer taps it, checkout happens in the PayPal app if they are eligible and have it installed — approving with biometrics or a passkey — then returns to your app through your Android App Link. If the PayPal app is not installed or the buyer is not eligible, checkout continues in an AndroidX Auth Tab automatically.
 
 > **Before you start:** complete [Install & Setup (Android)](../getting-started/android-install-and-setup.md). It covers the SDK dependency, `CoreConfig`, and return-link registration shared by every payment method.
 
 ## Overview
 
-When the buyer taps your PayPal button, you call `createPayPalSession()` (with a token type, buyer identity, return URLs, and user action) and create the order — then call `start(activity, orderId, callback)`. `createPayPalSession()` is required and must come first.
+When the buyer taps your PayPal button, you call `createPayPalSession()` (with a token type, buyer identity, return URLs, and user action) and create the order — then call `start(orderId, callback)`. On success, launch the returned `PayPalAuthChallenge` with a launcher registered using `LaunchPayPal`. `createPayPalSession()` is required and must come first.
 
 **Prepare the session before checkout.** `start()` requires a prepared shopper session, created by `createPayPalSession()`. Until it has been called, `start()` will not proceed — its callback receives a `PayPalPresentAuthChallengeResult.Failure` carrying `PayPalError.sessionNotCreatedError` (logged as the `SESSION_NOT_STARTED` event). Preparing the session carries the token type, buyer identity, return URLs, and user action to PayPal and determines whether checkout uses the PayPal app or the in-app browser.
 
 **Create the session when the buyer shows intent.** Call `createPayPalSession()` from your PayPal button's `onClick` handler, ideally at the same time as you create the order, so its network latency overlaps order creation and it is ready by the time you call `start()`.
 
-`start()` itself only confirms whether the auth challenge (app switch or in-app browser) launched — the buyer's actual approval, cancellation, or failure is delivered later, when you forward the return intent to `finishStart()`.
+`start()` prepares an auth challenge (app switch or Auth Tab). The buyer's actual approval, cancellation, or failure is delivered later to the `LaunchPayPal` result callback or, for app switch and browser fallback returns, through your Activity's return intent.
 
 ```mermaid
 sequenceDiagram
@@ -26,25 +26,25 @@ sequenceDiagram
         App->>Server: Create order (Orders v2)
         Server-->>App: orderId
     end
-    App->>SDK: start(activity, orderId, callback)
+    App->>SDK: start(orderId, callback)
+    SDK-->>App: PayPalAuthChallenge
+    App->>SDK: Launch challenge with LaunchPayPal
     alt Buyer eligible and PayPal app installed
         SDK->>PayPal: Open the PayPal app via your App Link
         Note over PayPal: Buyer approves with biometrics or a passkey
     else App not installed or buyer not eligible
-        SDK->>PayPal: Open checkout in an Auth Tab or Chrome Custom Tab
-        Note over SDK: Browser type depends on the host Activity
+        SDK->>PayPal: Open checkout in an Auth Tab
         Note over PayPal: Buyer logs in and approves
     end
-    SDK->>App: PayPalPresentAuthChallengeResult (challenge presented)
-    PayPal-->>App: Return to your app (App Link)
-    App->>SDK: finishStart(intent)
+    PayPal-->>App: Activity result or return App Link
+    App->>SDK: finishStart(launchResult or intent)
     SDK->>App: PayPalFinishStartResult: Success / Canceled / Failure / NoResult
     App->>Server: Capture order (Orders v2)
 ```
 
 ## How the SDK works
 
-The SDK handles the client-side of checkout. It does not create or capture orders — your server does that with the Orders v2 API. Your responsibilities are: configure the client (see Install & Setup); in your `onClick` handler call `createPayPalSession()`, create the order, and pass its ID and your `Activity` to `start()`; then forward the return intent to `finishStart()` and capture. Choosing the experience (PayPal app vs. in-app browser) and returning the buyer are handled for you. The one ordering rule is that `createPayPalSession()` must be called before `start()`.
+The SDK handles the client-side of checkout. It does not create or capture orders — your server does that with the Orders v2 API. Your responsibilities are: configure the client (see Install & Setup); register `LaunchPayPal`; in your `onClick` handler call `createPayPalSession()`, create the order, and pass its ID to `start()`; launch the returned challenge; then pass the launch result or return intent to `finishStart()` and capture. Choosing the experience (PayPal app vs. Auth Tab) and returning the buyer are handled for you. The one ordering rule is that `createPayPalSession()` must be called before `start()`.
 
 ## Before you begin
 
@@ -109,45 +109,61 @@ val clientMetadataId = dataCollector.collectDeviceData(
 // Send clientMetadataId to your server; set it as the PayPal-Client-Metadata-Id header on your Orders v2 create call.
 ```
 
-### Step 4: Create the order and start checkout
+### Step 4: Register the launcher, create the order, and start checkout
 
-An AndroidX `ComponentActivity` host is recommended for `start()` and `vault()`. This includes
-`FragmentActivity` and `AppCompatActivity`. These hosts provide the `ActivityResultRegistry` used by
-Auth Tab and support restoration across configuration changes and process recreation during the web
-fallback. A plain `android.app.Activity` is also supported; for that host, the SDK opens the web
-fallback in a Chrome Custom Tab without the same automatic restoration guarantees.
+Register `LaunchPayPal` unconditionally when your Activity or Fragment is created. The contract owns
+Auth Tab intent creation and result parsing; `PayPalClient` does not retain an Activity reference or
+require an Activity argument.
 
 ```kotlin
+private val payPalLauncher = registerForActivityResult(LaunchPayPal()) { launchResult ->
+    checkoutClient.finishStart(launchResult)?.let(::handleCheckoutResult)
+}
+
 val orderId = myServer.createOrder()   // include the client metadata ID from Step 3
 
 checkoutClient.start(
-    activity = this,
     orderId  = orderId,
     callback = object : PayPalResultCallback {
         override fun onPayPalResult(result: PayPalPresentAuthChallengeResult) {
             when (result) {
-                is PayPalPresentAuthChallengeResult.Success -> { /* Challenge presented (app switch or browser) — awaiting the buyer's return */ }
-                is PayPalPresentAuthChallengeResult.Failure -> showError(result.error)   // includes SESSION_NOT_STARTED
+                is PayPalPresentAuthChallengeResult.Success ->
+                    payPalLauncher.launch(result.authChallenge)
+                is PayPalPresentAuthChallengeResult.Failure ->
+                    showError(result.error)   // includes SESSION_NOT_STARTED
             }
         }
     }
 )
 ```
 
+In Compose, register the same contract with `rememberLauncherForActivityResult`:
+
+```kotlin
+val payPalLauncher = rememberLauncherForActivityResult(LaunchPayPal()) { launchResult ->
+    checkoutClient.finishStart(launchResult)?.let(::handleCheckoutResult)
+}
+```
+
 ### Step 5: Handle the return
 
-Forward the return intent to `finishStart()` when your activity re-enters the foreground. This is where the buyer's actual approval, cancellation, or failure is delivered — `start()`'s callback only confirmed the challenge launched.
+The registered `LaunchPayPal` callback handles Auth Tab results. Also forward return intents to
+`finishStart()` for PayPal app switch and the Custom Tabs fallback used when Auth Tab is unavailable.
+Both overloads produce the same `PayPalFinishStartResult` variants.
 
 ```kotlin
 override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    when (val result = checkoutClient.finishStart(intent)) {
-        is PayPalFinishStartResult.Success  -> result.orderId?.let { captureOrder(it) }   // result.payerId also available; both are nullable
-        is PayPalFinishStartResult.Canceled -> showCheckoutScreen()   // result.orderId also available, if present
-        is PayPalFinishStartResult.Failure  -> showError(result.error)   // result.orderId also available, if present
-        PayPalFinishStartResult.NoResult    -> Unit   // unrelated intent; ignore
-        null                                 -> Unit   // no matching in-memory or restored browser-switch state
+    checkoutClient.finishStart(intent)?.let(::handleCheckoutResult)
+}
+
+private fun handleCheckoutResult(result: PayPalFinishStartResult) {
+    when (result) {
+        is PayPalFinishStartResult.Success  -> result.orderId?.let { captureOrder(it) }
+        is PayPalFinishStartResult.Canceled -> showCheckoutScreen()
+        is PayPalFinishStartResult.Failure  -> showError(result.error)
+        PayPalFinishStartResult.NoResult    -> Unit
     }
 }
 ```
@@ -190,7 +206,7 @@ checkoutClient.createPayPalSession(tokenType = TokenType.ORDER_ID, userIdentity 
 
 ## Vault with Purchase
 
-Vault with Purchase saves the buyer's PayPal account **while** completing a real purchase, in a single approval. There is no separate client call — use the exact same button → `createPayPalSession(tokenType = TokenType.ORDER_ID, ...)` → `start(activity, orderId, callback)` → `finishStart(intent)` sequence above. The only difference is that your server creates the order with `payment_source.paypal.attributes.vault` set:
+Vault with Purchase saves the buyer's PayPal account **while** completing a real purchase, in a single approval. There is no separate client call — use the exact same button → `createPayPalSession(tokenType = TokenType.ORDER_ID, ...)` → `start(orderId, callback)` → launch challenge → `finishStart(result)` sequence above. The only difference is that your server creates the order with `payment_source.paypal.attributes.vault` set:
 
 ```shell
 curl -X POST https://api-m.sandbox.paypal.com/v2/checkout/orders \
@@ -210,6 +226,10 @@ On approval PayPal both completes the purchase and stores the payment method, bu
 Save a buyer's PayPal account for future charges with no purchase now. Call `createPayPalSession()` first with `tokenType = TokenType.VAULT_ID` (use `SETUP_NOW` for a "Set up now" button), then create the setup token on your server and call `vault()`.
 
 ```kotlin
+private val payPalVaultLauncher = registerForActivityResult(LaunchPayPal()) { launchResult ->
+    checkoutClient.finishVault(launchResult)?.let(::handleVaultResult)
+}
+
 // In your "Set up now" button's onClick handler:
 checkoutClient.createPayPalSession(
     tokenType    = TokenType.VAULT_ID,
@@ -221,12 +241,12 @@ checkoutClient.createPayPalSession(
 val setupTokenId = myServer.createSetupToken()
 
 checkoutClient.vault(
-    activity     = this,
     setupTokenId = setupTokenId,
     callback = object : PayPalResultCallback {
         override fun onPayPalResult(result: PayPalPresentAuthChallengeResult) {
             when (result) {
-                is PayPalPresentAuthChallengeResult.Success -> { /* Challenge presented — awaiting the buyer's return */ }
+                is PayPalPresentAuthChallengeResult.Success ->
+                    payPalVaultLauncher.launch(result.authChallenge)
                 is PayPalPresentAuthChallengeResult.Failure -> showError(result.error)   // includes SESSION_NOT_STARTED
             }
         }
@@ -234,7 +254,9 @@ checkoutClient.vault(
 )
 ```
 
-Forward the return intent to `finishVault()` in `onNewIntent`, the same way checkout forwards to `finishStart()`. The vaulted approval is identified by `approvalSessionId`, not the setup token ID:
+Register `LaunchPayPal` with a callback that passes its result to `finishVault()`. Also forward the
+return intent in `onNewIntent`, the same way checkout forwards to `finishStart()`. The vaulted
+approval is identified by `approvalSessionId`, not the setup token ID:
 
 ```kotlin
 override fun onNewIntent(intent: Intent) {
@@ -252,7 +274,7 @@ override fun onNewIntent(intent: Intent) {
 
 ## Pay Later and PayPal Credit
 
-Pay Later and PayPal Credit are alternate PayPal funding sources — not separate SDK flows. Selection happens entirely on your server: set `payment_source.paypal.experience_context.payment_method_selected` to `PAYPAL` (default), `PAYPAL_PAY_LATER`, or `PAYPAL_CREDIT` when you create the order. The client-side flow is identical regardless of funding source — the same `createPayPalSession()` → `start(activity, orderId, callback)` → `finishStart(intent)` sequence shown above handles all three. Both Pay Later and PayPal Credit are supported for One-Time Checkout and Vault with Purchase; neither applies to Vault without Purchase.
+Pay Later and PayPal Credit are alternate PayPal funding sources — not separate SDK flows. Selection happens entirely on your server: set `payment_source.paypal.experience_context.payment_method_selected` to `PAYPAL` (default), `PAYPAL_PAY_LATER`, or `PAYPAL_CREDIT` when you create the order. The client-side flow is identical regardless of funding source — the same `createPayPalSession()` → `start(orderId, callback)` → launch challenge → `finishStart(result)` sequence shown above handles all three. Both Pay Later and PayPal Credit are supported for One-Time Checkout and Vault with Purchase; neither applies to Vault without Purchase.
 
 `PayPalCheckoutFundingSource` (`PAYPAL` / `PAY_LATER` / `PAYPAL_CREDIT`) is a convenience enum you can use in your own app code to track which funding source the buyer selected and map it to the corresponding `payment_method_selected` value on your create-order request — it is not passed to any `PayPalClient` method.
 
@@ -260,26 +282,24 @@ Dedicated buttons exist — `PayLaterButton` and `PayPalCreditButton` (`payment-
 
 ## Result handling
 
-`start()` and `vault()` deliver a `PayPalPresentAuthChallengeResult` that only confirms whether the auth challenge (app switch or in-app browser) launched. The buyer's actual outcome arrives later, when you forward the return intent to `finishStart()` (checkout, including Vault with Purchase) or `finishVault()` (Vault without Purchase). Handle all cases — cancellation is a normal buyer choice, not an error.
+`start()` and `vault()` deliver a `PayPalPresentAuthChallengeResult`. On success, launch its
+`authChallenge` with `LaunchPayPal`. The buyer's actual outcome arrives later through that launcher's
+callback or the Activity return intent. Pass either to `finishStart()` (checkout, including Vault
+with Purchase) or `finishVault()` (Vault without Purchase). Handle all cases — cancellation is a
+normal buyer choice, not an error.
 
 | Call | Type | Cases | What you do |
 | --- | --- | --- | --- |
-| `start()` / `vault()` callback | `PayPalPresentAuthChallengeResult` | `Success` / `Failure(error)` | `Success` only confirms the challenge launched. `Failure` means checkout/vault never launched — show the error. `SESSION_NOT_STARTED` means `createPayPalSession()` was not called before `start()` / `vault()` — fix the ordering. |
-| `finishStart(intent)` | `PayPalFinishStartResult?` | `Success(orderId?, payerId?)` / `Canceled(orderId?)` / `Failure(error, orderId?)` / `NoResult` / `null` | Success: capture the order if `orderId` is present. Canceled: return the buyer to your checkout screen; `orderId` is included when available; no charge was made. Failure: show an error; `orderId` is included when available. `NoResult`: the intent was not a PayPal return — ignore it. `null`: `finishStart()` was called with no matching in-memory or restored browser-switch state — ignore it. |
-| `finishVault(intent)` | `PayPalFinishVaultResult?` | `Success(approvalSessionId)` / `Canceled` / `Failure(error)` / `NoResult` / `null` | Success: store the returned `approvalSessionId`. Canceled: return the buyer to your save screen. Failure: show an error. `NoResult`: the intent was not a PayPal return — ignore it. `null`: same as above — no matching in-memory or restored browser-switch state. |
+| `start()` / `vault()` callback | `PayPalPresentAuthChallengeResult` | `Success(authChallenge)` / `Failure(error)` | Launch `authChallenge` with your registered `LaunchPayPal` launcher. `Failure` means no challenge was prepared — show the error. `SESSION_NOT_STARTED` means `createPayPalSession()` was not called first. |
+| `finishStart(launchResult)` or `finishStart(intent)` | `PayPalFinishStartResult?` | `Success(orderId?, payerId?)` / `Canceled(orderId?)` / `Failure(error, orderId?)` / `NoResult` / `null` | Success: capture the order if `orderId` is present. Canceled: return the buyer to your checkout screen; no charge was made. Failure: show an error. `NoResult`: wait for or ignore a non-terminal app-switch result. `null`: there is no matching in-memory or restored browser-switch state. |
+| `finishVault(launchResult)` or `finishVault(intent)` | `PayPalFinishVaultResult?` | `Success(approvalSessionId)` / `Canceled` / `Failure(error)` / `NoResult` / `null` | Success: store `approvalSessionId`. Canceled: return the buyer to your save screen. Failure: show an error. `NoResult`: wait for or ignore a non-terminal app-switch result. `null`: there is no matching state. |
 
-**Configuration changes and process death.** For an Auth Tab flow hosted by a `ComponentActivity`,
-AndroidX saves the pending launcher's registry mapping with the host Activity, while the SDK saves
-minimal browser-switch request state. The SDK re-registers the same key before the recreated Activity
-reaches `STARTED`, then includes the restored request state on the return intent. This lets a newly
-constructed `PayPalClient` complete `finishStart()` or `finishVault()` even if the app process was
-killed while the browser was foregrounded. Android must retain the Activity's saved state; force-stop,
-clearing app data, removing the task, or disabling the SDK's initializer provider invalidates the
-in-flight result. If `finishStart()` / `finishVault()` is invoked without in-memory or restored state,
-it returns the documented `null` result. Chrome Custom Tab flows from a plain `Activity`, like the
-PayPal-app switch path, do not use the Activity Result registry and therefore do not have the same
-automatic restoration guarantees; use the existing `instanceState` / `restore()` mechanism where
-manual state recovery is needed.
+**Configuration changes and process death.** Register `LaunchPayPal` unconditionally with the same
+Activity Result key/order each time your Activity or Fragment is created; AndroidX restores its
+pending callback across recreation. Keep `PayPalClient` in a `ViewModel` for configuration changes.
+For process recreation, save `PayPalClient.instanceState` and pass it to `restore()` on the newly
+created client before handling the result. If `finishStart()` / `finishVault()` is invoked without
+matching state, it returns `null`.
 
 ## Best practices
 
@@ -297,8 +317,8 @@ Test on a **physical device** — the app-switch path does not work on an emulat
 
 ### Trigger the app-switch path
 
-The SDK switches to the PayPal app only when all of the following hold; otherwise it opens the web
-fallback in an Auth Tab for a `ComponentActivity` host or a Chrome Custom Tab for a plain `Activity`:
+The SDK switches to the PayPal app only when all of the following hold; otherwise `LaunchPayPal`
+opens the web fallback in an Auth Tab:
 
 * A physical device with the PayPal app installed (the sandbox app for sandbox testing).
 * Merchant and buyer are in the US, and your integration is App Switch eligible.
@@ -312,11 +332,10 @@ To test the in-app browser path, use a device without the PayPal app installed, 
 | Scenario | Expected result |
 | --- | --- |
 | **App switch — end to end** | The buyer switches to the PayPal app, approves, returns to your app, and the order captures. |
-| **In-app browser — `ComponentActivity` host** | With the PayPal app not installed (or an ineligible buyer), checkout completes in an Auth Tab and the order captures. |
-| **In-app browser — plain `Activity` host** | Checkout completes in a Chrome Custom Tab and returns through the configured App Link or custom scheme. |
-| **In-app browser — buyer cancellation** | From a `ComponentActivity`, close the Auth Tab before approval and verify the SDK reports `Canceled`. |
-| **In-app browser — configuration change** | From a `ComponentActivity`, rotate the device while the Auth Tab is open, then approve or cancel; the recreated Activity receives exactly one result. |
-| **In-app browser — process recreation** | From a `ComponentActivity`, with the Auth Tab open, let Android kill the merchant app process, then complete or cancel; a newly constructed client handles the restored result. |
+| **In-app browser — end to end** | With the PayPal app not installed (or an ineligible buyer), checkout completes in an Auth Tab and the order captures. |
+| **In-app browser — buyer cancellation** | Close the Auth Tab before approval and verify the SDK reports `Canceled`. |
+| **In-app browser — configuration change** | Rotate the device while the Auth Tab is open, then approve or cancel; the recreated Activity or Fragment receives exactly one result. |
+| **In-app browser — process recreation** | With the Auth Tab open, let Android kill the merchant app process, restore `PayPalClient.instanceState`, then complete or cancel. |
 | Buyer cancels in PayPal | The buyer is returned to your checkout screen and no charge is made. |
 | Vault with Purchase | Order captures; the vaulted token is retrievable server-side (not from the SDK result). |
 | Vault without Purchase | You receive and store the approval session ID from `finishVault()`, and can charge the vaulted account later. |

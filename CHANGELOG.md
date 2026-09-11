@@ -3,9 +3,9 @@
 ## Unreleased
 
 * PayPalPayments
-  * Use AndroidX Auth Tab for the PayPal web fallback and report `Canceled` when the buyer closes it
-  * Require the Activity passed to `start()` or `vault()` to extend `ComponentActivity`, so Auth Tab
-    results can survive configuration changes and process recreation without an SDK trampoline Activity
+  * Add `LaunchPayPal`, an Activity Result contract that encapsulates PayPal app switch and the AndroidX Auth Tab web fallback
+  * Return a `PayPalAuthChallenge` from `start()` / `vault()` and remove their Activity parameter, so `PayPalClient` does not retain or require a specific Activity type
+  * Add `finishStart(PayPalLaunchResult)` and `finishVault(PayPalLaunchResult)` overloads, including Auth Tab cancellation and verification failures
 
 ## 3.0.0 (2026-08-18)
 
